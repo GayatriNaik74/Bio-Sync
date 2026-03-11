@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+data/raw/*.csv
+models/*.pkl
+models/*.h5
+.DS_Store
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,18 @@
+{
+  "dwell_mean": 84.45270270270271,
+  "dwell_std": 16.479034370268156,
+  "dwell_min": 49.0,
+  "dwell_max": 157.0,
+  "dwell_median": 81.0,
+  "dwell_p25": 74.0,
+  "dwell_p75": 90.25,
+  "flight_mean": 238.50344827586207,
+  "flight_std": 246.42125759561804,
+  "flight_min": 16.0,
+  "flight_max": 1536.0,
+  "flight_median": 161.0,
+  "flight_p25": 126.0,
+  "flight_p75": 234.0,
+  "dwell_flight_ratio": 0.35261581121550023,
+  "total_keypresses": 148.0
+}
