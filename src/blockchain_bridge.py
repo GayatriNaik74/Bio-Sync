@@ -11,7 +11,7 @@ from web3 import Web3
 
 # ── Configuration ──────────────────────────────────
 # !! REPLACE with your contract address from truffle migrate !!
-CONTRACT_ADDRESS = "0x0b54FBe4Af911c714f180356859648Db40858588"
+CONTRACT_ADDRESS =  "0x66664c46251507DB7a6d5fdff443D739689d5104"
 
 GANACHE_URL  = "http://127.0.0.1:7545"
 ABI_PATH     = "blockchain/build/contracts/BioSyncAuth.json"
