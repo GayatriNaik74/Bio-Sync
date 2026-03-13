@@ -32,27 +32,31 @@ def load_baseline():
 def score_to_trust(raw_score, baseline):
     mean      = baseline['mean_score']
     std       = baseline['std_score']
+    threshold = baseline['threshold']
 
-    # How far is this score from the mean, relative to std?
+    # How far below the mean is this score?
+    # Positive z = above mean = very normal
+    # z = 0      = at mean    = normal
+    # z = -2     = threshold  = borderline
+    # z = -4     = well below = anomaly
     z = (raw_score - mean) / (std + 1e-9)
 
-    # Map z to 0-100 with gentler scaling
-    # z = 0  (at mean)       → 85
-    # z = +1 (above mean)    → 95
-    # z = -1 (below mean)    → 75
-    # z = -3 (3 std below)   → 55 (warning zone)
-    # z = -5 (very anomalous)→ 35 (lock zone)
-    trust = float(np.clip(85 + z * 10, 0, 100))
+    # Gentler mapping — requires 3+ std devs to trigger HIGH
+    # z >= 0   → 85–100  (normal operation)
+    # z = -1   → 77      (still fine)
+    # z = -2   → 70      (MEDIUM warning)
+    # z = -3   → 62      (approaching lock)
+    # z = -4   → 55      (HIGH — lock triggers)
+    trust = float(np.clip(85 + z * 8, 0, 100))
     return round(trust, 1)
-
 # ── Determine risk level from trust score ───────────
 def get_risk_level(trust_score):
-    if trust_score >= 80:
+    if trust_score >= 70:
         return "LOW"       # green — safe
-    elif trust_score >= 60:
-        return "MEDIUM"    # amber — soft warning
+    elif trust_score >= 55:
+        return "MEDIUM"    # amber — soft warning only
     else:
-        return "HIGH"      # red — trigger lock
+        return "HIGH" 
 
 # ── Compute SHAP explanation ─────────────────────────
 def get_shap_values(model, X_scaled, feat_names):
