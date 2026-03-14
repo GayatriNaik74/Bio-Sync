@@ -40,7 +40,7 @@ def build_feature_matrix(files):
             dwell_df  = compute_dwell(df)
             flight_df = compute_flight(df)
 
-            if len(dwell_df) < 20 or len(flight_df) < 20:
+            if len(dwell_df) < 5 or len(flight_df) < 5:
                 print(f"  ⚠ Skipping {path} — too few keystrokes")
                 continue
 

@@ -487,16 +487,79 @@ class EnrollmentScreen(ctk.CTkFrame):
     def _run_enrollment_thread(self):
         def _thread():
             try:
-                result = subprocess.run(
-                    [sys.executable, "src/enrollment.py"],
-                    cwd=os.getcwd(),
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    self.after(0, lambda: self._update_status(
-                        f"Error: {result.stderr[:120]}", C_RED))
-                    return
+                import sys, glob, numpy as np, joblib
+                from sklearn.ensemble import IsolationForest
+                sys.path.insert(0, 'src')
+                from features import (load_events, compute_dwell,
+                                    compute_flight, extract_features)
 
+                RAW_DIR      = "data/raw"
+                SCALER_PATH  = "models/pretrained_scaler.pkl"
+                BASELINE_OUT = "models/user_baseline.pkl"
+
+                # ── Load sessions ─────────────────────
+                files = sorted(glob.glob(
+                    os.path.join(RAW_DIR, "session_*.csv")))
+                if not files:
+                    raise FileNotFoundError("No session CSVs found")
+
+                # ── Build feature matrix ──────────────
+                feature_rows = []
+                for path in files:
+                    try:
+                        df        = load_events(path)
+                        dwell_df  = compute_dwell(df)
+                        flight_df = compute_flight(df)
+                        if len(dwell_df) < 5 or len(flight_df) < 5:
+                            continue
+                        feat = extract_features(dwell_df, flight_df)
+                        feature_rows.append(list(feat.values()))
+                    except Exception:
+                        continue
+
+                if not feature_rows:
+                    raise ValueError("No valid sessions found")
+
+                X_raw = np.array(feature_rows)
+
+                # ── Scale ─────────────────────────────
+                scaler = joblib.load(SCALER_PATH)
+                n_cmu  = scaler.n_features_in_
+                n_user = X_raw.shape[1]
+                if n_user < n_cmu:
+                    pad   = np.zeros((X_raw.shape[0],
+                                    n_cmu - n_user))
+                    X_pad = np.hstack([X_raw, pad])
+                else:
+                    X_pad = X_raw[:, :n_cmu]
+                X_scaled = scaler.transform(X_pad)
+
+                # ── Train ─────────────────────────────
+                model = IsolationForest(
+                    n_estimators=300,
+                    contamination=0.03,
+                    random_state=42,
+                    n_jobs=-1
+                )
+                model.fit(X_scaled)
+                scores = model.decision_function(X_scaled)
+
+                # ── Save baseline ─────────────────────
+                baseline = {
+                    'model'      : model,
+                    'scaler'     : scaler,
+                    'mean_score' : float(scores.mean()),
+                    'std_score'  : float(scores.std()),
+                    'threshold'  : float(
+                        scores.mean() - 2 * scores.std()),
+                    'n_sessions' : X_raw.shape[0],
+                    'feat_mean'  : X_raw.mean(axis=0).tolist(),
+                    'feat_std'   : X_raw.std(axis=0).tolist(),
+                }
+                os.makedirs("models", exist_ok=True)
+                joblib.dump(baseline, BASELINE_OUT)
+
+                # ── Mark enrolled ─────────────────────
                 if os.path.exists(USERS_FILE):
                     with open(USERS_FILE) as f:
                         users = json.load(f)
@@ -508,15 +571,17 @@ class EnrollmentScreen(ctk.CTkFrame):
 
                 self.state["enrolled"] = True
                 self.after(0, lambda: self._update_status(
-                    "✓  Model trained!  Launching dashboard...", C_GREEN))
-                self.after(1400, lambda: self.app.show_screen("dashboard"))
+                    f"✓  Model trained on {len(feature_rows)} "
+                    f"sessions!  Launching dashboard...",
+                    C_GREEN))
+                self.after(1400,
+                    lambda: self.app.show_screen("dashboard"))
 
             except Exception as e:
                 self.after(0, lambda: self._update_status(
                     f"Error: {e}", C_RED))
 
         threading.Thread(target=_thread, daemon=True).start()
-
     # ─────────────────────────────────────────────────
     # HELPERS
     # ─────────────────────────────────────────────────

@@ -1,27 +1,7 @@
 {
-  "Gayatri Naik": {
-    "password": "18edfd97c1e4334bd77b9d90e137b2cc862b269c2d0247638874e5190f6db59a",
+  "Gmnaik": {
+    "password": "5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5",
     "enrolled": true,
-    "created": "2026-03-13T22:15:43.261349"
-  },
-  "gayatrin": {
-    "password": "18edfd97c1e4334bd77b9d90e137b2cc862b269c2d0247638874e5190f6db59a",
-    "enrolled": true,
-    "created": "2026-03-13T22:21:29.791625"
-  },
-  "gayatri naik": {
-    "password": "f28e7a87ae4bc8387e2ad86fe6a0a8dd553123ac97d4a3d9cf29729dc9a14c3b",
-    "enrolled": false,
-    "created": "2026-03-13T23:27:52.665588"
-  },
-  "gayatri": {
-    "password": "e78cd891ed816ded25d042341d96f0fa8db04b98dbcb454f49d0ccc4b8c11e2f",
-    "enrolled": false,
-    "created": "2026-03-13T23:40:26.868287"
-  },
-  "sheen": {
-    "password": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
-    "enrolled": false,
-    "created": "2026-03-14T00:02:02.501164"
+    "created": "2026-03-14T23:02:13.975875"
   }
 }
