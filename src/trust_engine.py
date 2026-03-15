@@ -30,30 +30,26 @@ def load_baseline():
 
 # ── Map raw anomaly score → Trust Score 0–100 ───────
 def score_to_trust(raw_score, baseline):
-    mean      = baseline['mean_score']
-    std       = baseline['std_score']
-    threshold = baseline['threshold']
+    mean = baseline['mean_score']
+    std  = baseline['std_score']
 
-    # How far below the mean is this score?
-    # Positive z = above mean = very normal
-    # z = 0      = at mean    = normal
-    # z = -2     = threshold  = borderline
-    # z = -4     = well below = anomaly
     z = (raw_score - mean) / (std + 1e-9)
 
-    # Gentler mapping — requires 3+ std devs to trigger HIGH
-    # z >= 0   → 85–100  (normal operation)
-    # z = -1   → 77      (still fine)
-    # z = -2   → 70      (MEDIUM warning)
-    # z = -3   → 62      (approaching lock)
-    # z = -4   → 55      (HIGH — lock triggers)
-    trust = float(np.clip(85 + z * 8, 0, 100))
+    # Only flag as anomaly if 3+ std devs below mean
+    # z =  1  → 98  (very normal)
+    # z =  0  → 85  (normal)
+    # z = -1  → 75  (fine)
+    # z = -2  → 65  (MEDIUM warning)
+    # z = -3  → 55  (borderline)
+    # z = -4  → 45  (HIGH — genuine intruder)
+    trust = float(np.clip(85 + z * 10, 0, 100))
     return round(trust, 1)
+
 # ── Determine risk level from trust score ───────────
 def get_risk_level(trust_score):
-    if trust_score >= 70:
+    if trust_score >= 65:
         return "LOW"       # green — safe
-    elif trust_score >= 55:
+    elif trust_score >= 50:
         return "MEDIUM"    # amber — soft warning only
     else:
         return "HIGH" 
@@ -92,7 +88,7 @@ def compute_trust_score(event_log: list, baseline: dict) -> dict:
         keystrokes — number of keypresses in window
     """
     if not event_log:
-        return {'score': 50.0, 'risk': 'MEDIUM',
+        return {'score': 85.0, 'risk': 'LOW',
                 'raw_score': 0.0, 'top_features': [], 'keystrokes': 0}
 
     # Convert to DataFrame matching capture.py output format
@@ -104,8 +100,8 @@ def compute_trust_score(event_log: list, baseline: dict) -> dict:
     dwell_df  = compute_dwell(df)
     flight_df = compute_flight(df)
 
-    if len(dwell_df) < 5:
-        return {'score': 75.0, 'risk': 'LOW',
+    if len(dwell_df) < 2:
+        return {'score': 85.0, 'risk': 'LOW',
                 'raw_score': 0.0, 'top_features': [], 'keystrokes': len(dwell_df)}
 
     features  = extract_features(dwell_df, flight_df)

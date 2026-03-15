@@ -9,7 +9,7 @@ import os
 import subprocess
 import datetime
 
-LOCK_THRESHOLD = 45   # lock if score drops below this
+LOCK_THRESHOLD = 45  # lock if score drops below this
 LOCK_LOG       = "data/processed/lock_events.txt"
 
 def lock_workstation(reason: str = "Trust score below threshold"):

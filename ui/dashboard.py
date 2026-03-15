@@ -10,9 +10,13 @@ Layout inspired by reference design:
   - Score history bar
 """
 
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
 import customtkinter as ctk
 import tkinter as tk
-import threading, datetime, os, math
+import threading, datetime, math
+from pynput import keyboard
 
 from trust_engine      import compute_trust_score, load_baseline
 from lock_manager      import should_lock
@@ -37,11 +41,10 @@ C_BLUE   = "#60a5fa"
 
 
 # ═══════════════════════════════════════════════════════
-# ARC GAUGE  (matches reference style)
+# ARC GAUGE
 # ═══════════════════════════════════════════════════════
 class IntegrityGauge(tk.Canvas):
-    def __init__(self, parent, size=220,
-                 bg=C_CARD, **kw):
+    def __init__(self, parent, size=220, bg=C_CARD, **kw):
         self.SIZE = size
         super().__init__(parent,
             width=size,
@@ -53,7 +56,6 @@ class IntegrityGauge(tk.Canvas):
         self._anim_id = None
         self.after(60, lambda: self._draw(self._cur))
 
-    # colour helpers
     def _score_color(self, s):
         return (C_GREEN  if s >= 68
                 else C_AMBER if s >= 52
@@ -72,16 +74,12 @@ class IntegrityGauge(tk.Canvas):
         r  = sz // 2 - 18
         col = self._score_color(score)
 
-        # ── Background arc ────────────────────────
         self.create_arc(
             cx - r, cy - r, cx + r, cy + r,
             start=0, extent=180,
             style="arc",
             outline="#1e1e2a", width=14)
 
-        # ── Coloured score arc ────────────────────
-        extent = (score / 100) * 180
-        # gradient segments red→amber→green
         STEPS = 60
         for i in range(STEPS):
             t0 = i / STEPS
@@ -99,7 +97,6 @@ class IntegrityGauge(tk.Canvas):
                 outline=seg_col,
                 width=14)
 
-        # ── Score text ────────────────────────────
         self.create_text(cx, cy - 18,
             text=f"{int(round(score))}",
             fill=col,
@@ -184,7 +181,6 @@ class ThreatTimeline(tk.Canvas):
         def sy(s):
             return PT + gh * (1 - s / 100)
 
-        # Zone bands
         self.create_rectangle(PL, sy(52),
             PL+gw, PT+gh, fill="#1a0808", outline="")
         self.create_rectangle(PL, sy(68),
@@ -192,14 +188,12 @@ class ThreatTimeline(tk.Canvas):
         self.create_rectangle(PL, PT,
             PL+gw, sy(68), fill="#081a08", outline="")
 
-        # Threshold lines
-        for thr, col in [(68, "#4ade8040"),
-                         (52, "#f8717140")]:
+        for thr, col in [(68, "#2a5a2a"),
+                 (52, "#5a2a2a")]:
             y = sy(thr)
             self.create_line(PL, y, PL+gw, y,
                 fill=col, width=1, dash=(4, 4))
 
-        # Y labels
         for val, lbl in [(100,"100"),(68,"68"),
                          (52,"52"),(0,"0")]:
             self.create_text(PL-4, sy(val),
@@ -207,7 +201,6 @@ class ThreatTimeline(tk.Canvas):
                 font=("JetBrains Mono", 7),
                 anchor="e")
 
-        # Grid
         for val in [25, 50, 75, 100]:
             self.create_line(PL, sy(val),
                 PL+gw, sy(val),
@@ -219,7 +212,6 @@ class ThreatTimeline(tk.Canvas):
             x = PL + (i / (n-1)) * gw
             pts.append((x, sy(score)))
 
-        # Coloured line segments
         for i in range(len(pts)-1):
             avg = (self.points[i][0] +
                    self.points[i+1][0]) / 2
@@ -232,7 +224,6 @@ class ThreatTimeline(tk.Canvas):
                 fill=col, width=2,
                 capstyle="round")
 
-        # Dots
         for i, (x, y) in enumerate(pts):
             s   = self.points[i][0]
             col = (C_GREEN  if s >= 68
@@ -241,7 +232,6 @@ class ThreatTimeline(tk.Canvas):
             self.create_oval(x-3, y-3,
                 x+3, y+3, fill=col, outline="")
 
-        # Current dot (larger)
         if pts:
             lx, ly = pts[-1]
             ls  = self.points[-1][0]
@@ -252,7 +242,6 @@ class ThreatTimeline(tk.Canvas):
                 lx+5, ly+5,
                 fill=col, outline=C_BG, width=2)
 
-        # X labels
         for idx, anch in [(0,"w"),
                           (n//2,"center"),
                           (n-1,"e")]:
@@ -265,7 +254,6 @@ class ThreatTimeline(tk.Canvas):
                     font=("JetBrains Mono", 7),
                     anchor=anch)
 
-        # Border
         self.create_rectangle(PL, PT,
             PL+gw, PT+gh,
             outline="#1e1e2a", width=1)
@@ -290,50 +278,116 @@ class DashboardScreen(ctk.CTkFrame):
         self.activity_log   = []
         self.last_dwell     = 0.0
         self.last_flight    = 0.0
-        self.last_accuracy  = 0.0
         self.wpm            = 0.0
+        self._press_times   = {}
+        self._last_press    = None
+        self._kb_listener   = None
         self._build()
+
+    # ─────────────────────────────────────────────────
+    def _start_listener(self):
+        """Global keystroke listener — fills _event_buffer."""
+        import time as _time
+
+        self._press_times = {}
+        self._last_press  = None
+
+        def on_press(key):
+            if not self.monitoring:
+                return
+            try:
+                k = key.char
+                if not k or not k.isprintable():
+                    return
+                now_ms = int(_time.time() * 1000)
+                flight = (now_ms - self._last_press
+                          ) if self._last_press else 0
+                self._last_press     = now_ms
+                self._press_times[k] = now_ms
+                _event_buffer.append({
+                    'key'         : k,
+                    'event_type'  : 'press',
+                    'timestamp_ms': now_ms,
+                    'flight_ms'   : flight,
+                })
+            except Exception:
+                pass
+
+        def on_release(key):
+            if not self.monitoring:
+                return
+            try:
+                k = key.char
+                if not k or not k.isprintable():
+                    return
+                now_ms  = int(_time.time() * 1000)
+                press_t = self._press_times.pop(
+                    k, now_ms - 80)
+                dwell   = now_ms - press_t
+                for evt in reversed(_event_buffer[-50:]):
+                    if (evt['key'] == k and
+                            'dwell_ms' not in evt):
+                        evt['dwell_ms'] = dwell
+                        break
+            except Exception:
+                pass
+
+        if self._kb_listener:
+            try:
+                self._kb_listener.stop()
+            except Exception:
+                pass
+
+        self._kb_listener = keyboard.Listener(
+            on_press=on_press,
+            on_release=on_release)
+        self._kb_listener.daemon = True
+        self._kb_listener.start()
 
     # ─────────────────────────────────────────────────
     def on_show(self):
         if os.path.exists("models/user_baseline.pkl"):
-            self.baseline   = load_baseline()
+            if self.baseline is None:          # ← ADD THIS CHECK
+                self.baseline = load_baseline()
             self.monitoring = True
-            self._update_loop()
+            if not hasattr(self, '_loop_running'):  # ← ADD THIS
+                self._loop_running = True
+                self._update_loop()
         uname = self.state.get('username', 'user')
         self.user_lbl.configure(text=uname)
-        self.start_time = datetime.datetime.now()
-        sid = self.state.get('session_id', '—')
+        self.start_time     = datetime.datetime.now()
+        self.keypress_count = 0
+        self.anomaly_count  = 0
+        self.lock_count     = 0
+        self.score_history  = []
+        self.intrusion_log  = []
         self._add_activity("User authenticated", C_BLUE)
         self._add_activity("Biometric model loaded", C_GREEN)
+        self._start_listener()
 
     # ─────────────────────────────────────────────────
-    # BUILD
+    # BUILD UI
     # ─────────────────────────────────────────────────
     def _build(self):
 
-        # ════════════════════════
-        # SIDEBAR
-        # ════════════════════════
+        # ── SIDEBAR ──────────────────────────────────
         sb = ctk.CTkFrame(self, width=200,
             fg_color=C_SIDE, corner_radius=0)
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
 
-        # Logo
         ctk.CTkLabel(sb,
             text="🛡  BioSync",
             font=("Syne", 16, "bold"),
             text_color=C_BLUE
         ).pack(pady=(22, 28), padx=18, anchor="w")
 
-        # Nav
         nav = [
-            ("📊  Dashboard",   None),
-            ("👤  Profile",     lambda: self.app.show_screen("profile")),
-            ("📄  Security Log",lambda: self._focus_log()),
-            ("◈   Re-enroll",   lambda: self.app.show_screen("enrollment")),
-            ("⊠   Lock",        lambda: self.app.show_screen("lock")),
+            ("📊  Dashboard",    None),
+            ("👤  Profile",      lambda: self.app.show_screen("profile")),
+            ("📄  Security Log", lambda: self._focus_log()),
+            ("◈   Re-enroll",    lambda: self.app.show_screen("enrollment")),
+            ("⊠   Lock",         lambda: self.app.show_screen("lock")),
         ]
         for label, cmd in nav:
             active = cmd is None
@@ -349,7 +403,6 @@ class DashboardScreen(ctk.CTkFrame):
                 command=cmd if cmd else lambda: None
             ).pack(fill="x", padx=10, pady=2)
 
-        # User info bottom
         ctk.CTkLabel(sb,
             text="BioSync  v1.0",
             font=("JetBrains Mono", 8),
@@ -364,7 +417,7 @@ class DashboardScreen(ctk.CTkFrame):
             text_color=C_RED,
             font=("Syne", 11),
             corner_radius=6,
-            command=lambda: self.app.show_screen("login")
+            command=self._logout
         ).pack(side="bottom", fill="x",
                padx=10, pady=2)
 
@@ -376,27 +429,21 @@ class DashboardScreen(ctk.CTkFrame):
         ub = ctk.CTkFrame(sb, fg_color="transparent")
         ub.pack(side="bottom", fill="x",
                 padx=14, pady=6)
-        ctk.CTkLabel(ub,
-            text="👤",
+        ctk.CTkLabel(ub, text="👤",
             font=("Segoe UI Emoji", 14)
         ).pack(side="left", padx=(0, 8))
-        col2 = ctk.CTkFrame(ub,
-                            fg_color="transparent")
+        col2 = ctk.CTkFrame(ub, fg_color="transparent")
         col2.pack(side="left")
         self.user_lbl = ctk.CTkLabel(col2,
-            text="—",
-            font=("Syne", 12),
+            text="—", font=("Syne", 12),
             text_color=C_BRIGHT)
         self.user_lbl.pack(anchor="w")
-        ctk.CTkLabel(col2,
-            text="Enrolled",
+        ctk.CTkLabel(col2, text="Enrolled",
             font=("JetBrains Mono", 9),
             text_color=C_DIM
         ).pack(anchor="w")
 
-        # ════════════════════════
-        # SCROLLABLE MAIN
-        # ════════════════════════
+        # ── SCROLLABLE MAIN ───────────────────────────
         scroll = ctk.CTkScrollableFrame(self,
             fg_color=C_BG,
             scrollbar_button_color="#1e1e2a",
@@ -422,7 +469,7 @@ class DashboardScreen(ctk.CTkFrame):
             text_color=C_DIM
         ).pack(anchor="w", pady=(0, 16))
 
-        # ── Gauge + status ────────────────────────
+        # Gauge card
         gauge_card = ctk.CTkFrame(main,
             fg_color=C_CARD, corner_radius=12,
             border_width=1, border_color=C_BORDER)
@@ -438,19 +485,19 @@ class DashboardScreen(ctk.CTkFrame):
             text_color=C_GREEN)
         self.status_lbl.pack(pady=(0, 16))
 
-        # ── 6 Parameter cards ─────────────────────
+        # 6 Parameter cards
         cards_frame = ctk.CTkFrame(main,
                                    fg_color="transparent")
         cards_frame.pack(fill="x", pady=(0, 12))
 
         self.param_labels = {}
         params = [
-            ("⚡  Avg Speed",   "wpm",      "0 WPM",  C_BLUE),
-            ("✓   Accuracy",    "accuracy", "—",      C_GREEN),
-            ("📊  Rhythm",      "rhythm",   "—",      C_BLUE),
-            ("⏱   Key Hold",    "dwell",    "— ms",   C_DIM),
-            ("✈   Flight",      "flight",   "— ms",   C_DIM),
-            ("⚠   Risk Level",  "risk",     "LOW",    C_GREEN),
+            ("⚡  Avg Speed",   "wpm",      "0 WPM", C_BLUE),
+            ("✓   Accuracy",    "accuracy", "—",     C_GREEN),
+            ("📊  Rhythm",      "rhythm",   "—",     C_BLUE),
+            ("⏱   Key Hold",    "dwell",    "— ms",  C_DIM),
+            ("✈   Flight",      "flight",   "— ms",  C_DIM),
+            ("⚠   Risk Level",  "risk",     "LOW",   C_GREEN),
         ]
         for i, (label, key, default, color) in \
                 enumerate(params):
@@ -475,7 +522,7 @@ class DashboardScreen(ctk.CTkFrame):
                      pady=(0, 12))
             self.param_labels[key] = lbl
 
-        # ── Threat timeline ───────────────────────
+        # Threat timeline
         tl_card = ctk.CTkFrame(main,
             fg_color=C_CARD, corner_radius=12,
             border_width=1, border_color=C_BORDER)
@@ -483,8 +530,7 @@ class DashboardScreen(ctk.CTkFrame):
 
         tl_top = ctk.CTkFrame(tl_card,
                               fg_color="transparent")
-        tl_top.pack(fill="x", padx=16,
-                    pady=(12, 4))
+        tl_top.pack(fill="x", padx=16, pady=(12, 4))
         ctk.CTkLabel(tl_top,
             text="Threat Level Timeline",
             font=("Syne", 13, "bold"),
@@ -510,7 +556,7 @@ class DashboardScreen(ctk.CTkFrame):
         self.timeline.pack(
             fill="x", padx=12, pady=(0, 12))
 
-        # ── Score history bar ─────────────────────
+        # Score history bar
         hist_card = ctk.CTkFrame(main,
             fg_color=C_CARD, corner_radius=12,
             border_width=1, border_color=C_BORDER)
@@ -536,7 +582,7 @@ class DashboardScreen(ctk.CTkFrame):
         self.bar_canvas.pack(
             fill="x", padx=12, pady=(0, 12))
 
-        # ── Intrusion log ─────────────────────────
+        # Security log
         log_card = ctk.CTkFrame(main,
             fg_color=C_CARD, corner_radius=12,
             border_width=1, border_color=C_BORDER)
@@ -579,7 +625,7 @@ class DashboardScreen(ctk.CTkFrame):
         self.log_box.tag_config(
             "LOW",    foreground=C_GREEN)
 
-        # ── Recent activity ───────────────────────
+        # Recent activity
         act_card = ctk.CTkFrame(main,
             fg_color=C_CARD, corner_radius=12,
             border_width=1, border_color=C_BORDER)
@@ -600,7 +646,7 @@ class DashboardScreen(ctk.CTkFrame):
                      height=4).pack()
 
     # ─────────────────────────────────────────────────
-    # UPDATE LOOP
+    # UPDATE LOOP — every 15 seconds
     # ─────────────────────────────────────────────────
     def _update_loop(self):
         if not self.monitoring:
@@ -612,37 +658,41 @@ class DashboardScreen(ctk.CTkFrame):
         self.after(15000, self._update_loop)
 
     def _score_tick(self):
-        global _event_buffer
-        events = _event_buffer.copy()
-        _event_buffer.clear()
         if not self.baseline:
             return
 
-        result = compute_trust_score(
-            events, self.baseline)
-        self.state['trust_score'] = result['score']
-        self.state['risk_level']  = result['risk']
-        self.keypress_count += result.get(
-            'keystrokes', 0)
+        events = _event_buffer.copy()
+        _event_buffer.clear()
 
+        # Count keypresses — only once
+        self.keypress_count += len(events)
+
+        # Extract dwell / flight
         dwells  = [e.get('dwell_ms',  0)
-                   for e in events
-                   if e.get('dwell_ms',  0) > 0]
+           for e in events
+           if e.get('dwell_ms',  0) > 5]    # filter noise
         flights = [e.get('flight_ms', 0)
-                   for e in events
-                   if e.get('flight_ms', 0) > 0]
+           for e in events
+           if 5 < e.get('flight_ms', 0) < 2000]
         if dwells:
-            self.last_dwell = sum(dwells)/len(dwells)
+            self.last_dwell  = sum(dwells)  / len(dwells)
         if flights:
-            self.last_flight = sum(flights)/len(flights)
+            self.last_flight = sum(flights) / len(flights)
 
-        # WPM estimate
+        # WPM
         up = max(1, (datetime.datetime.now() -
                      self.start_time).total_seconds())
-        self.wpm = round((self.keypress_count / 5)
-                         / (up / 60), 1)
+        self.wpm = round(
+            (self.keypress_count / 5) / (up / 60), 1)
+
+        # Trust score
+        result = compute_trust_score(events, self.baseline)
+        self.state['trust_score'] = result['score']
+        self.state['risk_level']  = result['risk']
 
         risk = result['risk']
+
+        # Anomaly logging
         if risk in ('MEDIUM', 'HIGH'):
             self.anomaly_count += 1
             ts = datetime.datetime.now()
@@ -659,8 +709,9 @@ class DashboardScreen(ctk.CTkFrame):
             self.after(0, lambda r=risk:
                 self._add_activity(
                     f"Anomaly detected — risk={r}",
-                    C_RED if r=='HIGH' else C_AMBER))
+                    C_RED if r == 'HIGH' else C_AMBER))
 
+        # Blockchain
         try:
             handle_trust_score(
                 self.state.get('session_id', 'sess'),
@@ -668,13 +719,14 @@ class DashboardScreen(ctk.CTkFrame):
         except Exception:
             pass
 
+        # Lock trigger
         if should_lock(result['score']):
             self.lock_count += 1
-            self.after(0,
-                lambda: self._add_activity(
+            self.after(0, lambda:
+                self._add_activity(
                     "Session locked", C_RED))
-            self.after(0,
-                lambda: self.app.show_screen("lock"))
+            self.after(0, lambda:
+                self.app.show_screen("lock"))
 
         self.after(0,
             lambda: self._refresh_ui(result))
@@ -708,19 +760,18 @@ class DashboardScreen(ctk.CTkFrame):
                 text="●  No intrusion detected",
                 text_color=C_GREEN)
 
+        # Rhythm
+        rhythm = max(0, min(100,
+            int(100 - self.last_dwell / 5)
+        )) if self.last_dwell > 0 else 0
+
         # Uptime
         up  = int((datetime.datetime.now() -
                    self.start_time).total_seconds())
         h, rem = divmod(up, 3600)
         m, s   = divmod(rem, 60)
-        uptime = (f"{h}h {m}m" if h
-                  else f"{m}m {s}s" if m
-                  else f"{s}s")
 
         # Parameter cards
-        rhythm = max(0, 100 - int(
-            self.last_dwell / 5)) if self.last_dwell > 0 else 0
-
         self.param_labels['wpm'].configure(
             text=f"{self.wpm:.0f} WPM")
         self.param_labels['accuracy'].configure(
@@ -801,7 +852,6 @@ class DashboardScreen(ctk.CTkFrame):
         self.intrusion_log.clear()
 
     def _focus_log(self):
-        """Scroll to security log section."""
         pass
 
     # ─────────────────────────────────────────────────
@@ -825,3 +875,15 @@ class DashboardScreen(ctk.CTkFrame):
                 i*bw+1, h-bh,
                 (i+1)*bw-1, h,
                 fill=col, outline="")
+
+    # ─────────────────────────────────────────────────
+    # LOGOUT
+    # ─────────────────────────────────────────────────
+    def _logout(self):
+        self.monitoring = False
+        if self._kb_listener:
+            try:
+                self._kb_listener.stop()
+            except Exception:
+                pass
+        self.app.show_screen("login")

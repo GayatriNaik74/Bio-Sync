@@ -1,4 +1,7 @@
 """BioSync — Lock Screen / Re-auth Challenge"""
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
 import customtkinter as ctk
 import threading, datetime
 from trust_engine import compute_trust_score, load_baseline
@@ -21,6 +24,7 @@ class LockScreen(ctk.CTkFrame):
             self.baseline = load_baseline()
         self.typed_events = []
         self.type_entry.delete(0, "end")
+        self.prog_bar.set(0)
         self.status_lbl.configure(
             text="Type the phrase above to verify your identity",
             text_color="#3a3a55")

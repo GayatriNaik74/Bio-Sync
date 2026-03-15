@@ -77,11 +77,11 @@ def scale_user_features(X):
 def train_personal_model(X_scaled):
     print(f"  Training personal model on {len(X_scaled)} sessions...")
     model = IsolationForest(
-        n_estimators=300,
-        contamination=0.03,   # tighter — only 3% expected anomaly for this user
-        random_state=42,
-        n_jobs=-1
-    )
+    n_estimators=100,
+    contamination=0.1,    # ← was 0.03, now 0.1
+    random_state=42,
+    n_jobs=-1)
+    
     model.fit(X_scaled)
     scores = model.decision_function(X_scaled)
     print(f"  Personal score range: {scores.min():.4f} → {scores.max():.4f}")
