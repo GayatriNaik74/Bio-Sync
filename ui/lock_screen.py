@@ -1,8 +1,7 @@
 """
 BioSync — Lock Screen
-Appears automatically when trust score drops.
-Verifies identity by analysing TYPING PATTERN of challenge phrase
-not just checking if the phrase text matches.
+Verifies identity by analysing typing rhythm of challenge phrase.
+No password check — pure keystroke dynamics verification.
 """
 
 import sys, os
@@ -11,8 +10,8 @@ sys.path.insert(0, os.path.join(
 
 import customtkinter as ctk
 import threading, time
-from trust_engine  import compute_trust_score, load_baseline
-from lock_manager  import reset_lock_counter
+from trust_engine import compute_trust_score, load_baseline
+from lock_manager import reset_lock_counter
 
 try:
     from blockchain_bridge import handle_trust_score
@@ -42,6 +41,7 @@ class LockScreen(ctk.CTkFrame):
         self.typed_events = []
         self._press_times = {}
         self._last_press  = None
+        self._attempts    = 0
         self._build()
 
     def on_show(self):
@@ -50,12 +50,14 @@ class LockScreen(ctk.CTkFrame):
         self.typed_events = []
         self._press_times = {}
         self._last_press  = None
+        self._attempts    = 0
         self.type_entry.delete(0, "end")
         self.prog_bar.set(0)
         self.status_lbl.configure(
-            text="Type the phrase above to verify "
-                 "your identity",
+            text="Type the phrase above naturally"
+                 " — your rhythm will be analysed",
             text_color=C_DIM)
+        self.verify_btn.configure(state="normal")
         self.type_entry.focus()
 
     def _build(self):
@@ -64,6 +66,7 @@ class LockScreen(ctk.CTkFrame):
         center.place(relx=0.5, rely=0.5,
                      anchor="center")
 
+        # Lock icon
         ctk.CTkLabel(center, text="🔒",
             font=("Segoe UI Emoji", 52)
         ).pack(pady=(0, 10))
@@ -99,9 +102,17 @@ class LockScreen(ctk.CTkFrame):
             text_color=C_PURPLE
         ).pack(padx=24, pady=(0, 16))
 
-        # Input field
+        # Tip
+        ctk.CTkLabel(center,
+            text="💡 Type at your normal speed"
+                 " — don't rush or go slow",
+            font=("JetBrains Mono", 9),
+            text_color=C_AMBER
+        ).pack(pady=(0, 10))
+
+        # Input
         self.type_entry = ctk.CTkEntry(center,
-            placeholder_text="type here...",
+            placeholder_text="start typing here...",
             width=480, height=44,
             fg_color=C_CARD,
             border_color=C_BORDER,
@@ -117,13 +128,22 @@ class LockScreen(ctk.CTkFrame):
         self.type_entry.bind("<Return>",
             lambda e: self._verify())
 
+        # Status
         self.status_lbl = ctk.CTkLabel(center,
             text="Type the phrase above naturally"
                  " — your rhythm will be analysed",
             font=("JetBrains Mono", 10),
             text_color=C_DIM)
-        self.status_lbl.pack(pady=(0, 16))
+        self.status_lbl.pack(pady=(0, 8))
 
+        # Attempts
+        self.attempts_lbl = ctk.CTkLabel(center,
+            text="",
+            font=("JetBrains Mono", 9),
+            text_color=C_DIM)
+        self.attempts_lbl.pack(pady=(0, 8))
+
+        # Progress bar
         self.prog_bar = ctk.CTkProgressBar(center,
             width=480, height=3,
             fg_color="#1a1a25",
@@ -131,7 +151,8 @@ class LockScreen(ctk.CTkFrame):
         self.prog_bar.pack(pady=(0, 20))
         self.prog_bar.set(0)
 
-        ctk.CTkButton(center,
+        # Verify button
+        self.verify_btn = ctk.CTkButton(center,
             text="Verify Identity  →",
             height=42, width=220,
             fg_color=C_PURPLE,
@@ -139,9 +160,10 @@ class LockScreen(ctk.CTkFrame):
             text_color="#07070b",
             font=("Syne", 13, "bold"),
             corner_radius=8,
-            command=self._verify
-        ).pack()
+            command=self._verify)
+        self.verify_btn.pack()
 
+    # ─────────────────────────────────────────────────
     def _on_keypress(self, event):
         now_ms = int(time.time() * 1000)
 
@@ -158,7 +180,7 @@ class LockScreen(ctk.CTkFrame):
 
         flight = (now_ms - self._last_press
                   ) if self._last_press else 0
-        self._last_press     = now_ms
+        self._last_press       = now_ms
         self._press_times[key] = now_ms
 
         self.typed_events.append({
@@ -168,6 +190,7 @@ class LockScreen(ctk.CTkFrame):
             'flight_ms'   : flight,
         })
 
+        # Update progress bar
         typed = self.type_entry.get()
         prog  = min(len(typed) / len(CHALLENGE), 1.0)
         self.prog_bar.set(prog)
@@ -186,6 +209,7 @@ class LockScreen(ctk.CTkFrame):
                 evt['dwell_ms'] = dwell
                 break
 
+    # ─────────────────────────────────────────────────
     def _verify(self):
         typed = self.type_entry.get().strip()
 
@@ -197,36 +221,42 @@ class LockScreen(ctk.CTkFrame):
 
         if len(self.typed_events) < 5:
             self.status_lbl.configure(
-                text="⚠ Not enough keystrokes captured."
-                     " Type more.",
+                text="⚠ Not enough keystrokes."
+                     " Type more of the phrase.",
                 text_color=C_RED)
             return
 
+        self.verify_btn.configure(state="disabled")
         self.status_lbl.configure(
             text="⏳ Analysing your typing pattern...",
             text_color=C_AMBER)
+
         threading.Thread(
             target=self._check,
             daemon=True).start()
 
     def _check(self):
         if not self.baseline:
-            self.after(0, lambda: self.status_lbl.configure(
-                text="⚠ No baseline model found.",
-                text_color=C_RED))
+            self.after(0, lambda:
+                self.status_lbl.configure(
+                    text="⚠ No baseline model found.",
+                    text_color=C_RED))
             return
 
         result = compute_trust_score(
             self.typed_events, self.baseline)
-        score  = result['score']
-        risk   = result['risk']
+        score = result['score']
+        keys  = result['keystrokes']
 
-        print(f"  Lock screen verify: score={score}, "
-              f"risk={risk}, "
-              f"keys={result['keystrokes']}")
+        print(f"  Lock verify: score={score} "
+              f"keys={keys} "
+              f"dist={result.get('feat_dist','?')}")
 
-        # Identity confirmed if score >= 60
-        if score >= 60:
+        # Lower threshold for short phrase
+        VERIFY_THRESHOLD = 45
+
+        if score >= VERIFY_THRESHOLD:
+            # Identity confirmed
             reset_lock_counter()
 
             if _HAS_BLOCKCHAIN:
@@ -240,22 +270,30 @@ class LockScreen(ctk.CTkFrame):
 
             self.after(0, lambda: (
                 self.status_lbl.configure(
-                    text=f"✓ Identity confirmed  "
-                         f"— score {score:.0f}",
+                    text=f"✓ Identity confirmed"
+                         f" — score {score:.0f}",
                     text_color=C_GREEN),
+                self.attempts_lbl.configure(text=""),
                 self.after(1200, lambda:
                     self.app.show_screen("dashboard"))
             ))
+
         else:
-            self.after(0, lambda:
-                self.status_lbl.configure(
-                    text=f"✗ Pattern mismatch "
-                         f"— score {score:.0f}. "
-                         f"Try again naturally.",
-                    text_color=C_RED))
-            # Clear and let user retry
+            # Identity not confirmed
+            self._attempts += 1
             self.after(0, lambda: (
-                self.typed_events.clear(),
+                self.status_lbl.configure(
+                    text=f"✗ Pattern mismatch"
+                         f" — score {score:.0f}."
+                         f" Type again naturally.",
+                    text_color=C_RED),
+                self.attempts_lbl.configure(
+                    text=f"Attempt {self._attempts}"
+                         f" — relax and type naturally",
+                    text_color=C_AMBER),
                 self.type_entry.delete(0, "end"),
-                self.prog_bar.set(0)
+                self.typed_events.clear(),
+                self.prog_bar.set(0),
+                self.verify_btn.configure(
+                    state="normal")
             ))

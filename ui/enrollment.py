@@ -230,6 +230,14 @@ class EnrollmentScreen(ctk.CTkFrame):
             text_color=C_DIM)
         self.status_lbl.pack(pady=(0, 12))
 
+        # ── Tip ──────────────────────────────────────
+        ctk.CTkLabel(body,
+            text="💡 Type naturally as you would normally"
+                 " — don't try to type perfectly",
+            font=("JetBrains Mono", 9),
+            text_color=C_AMBER
+        ).pack(pady=(0, 8))
+
         # Start button
         self.start_btn = ctk.CTkButton(body,
             text="▶   Start Session 1",
@@ -273,7 +281,7 @@ class EnrollmentScreen(ctk.CTkFrame):
             text="▶   Start Session 1",
             fg_color=C_PURPLE, text_color="#07070b")
         self._update_status(
-            "3 sessions × 2 minutes  ·  "
+            "5 sessions × 2 minutes  ·  "
             "type naturally, don't rush", C_DIM)
         # Pre-load first paragraph
         self.para_text = PARAGRAPHS[0]
@@ -379,7 +387,7 @@ class EnrollmentScreen(ctk.CTkFrame):
                  f"{self.total_steps}")
         if self.current_step >= self.total_steps:
             self._update_status(
-                "✓  All 3 sessions done! "
+                "✓  All 5 sessions done! "
                 "Training your model...", C_GREEN)
             self.start_btn.configure(
                 state="disabled",
@@ -562,8 +570,8 @@ class EnrollmentScreen(ctk.CTkFrame):
                 X_scaled = scaler.transform(X_pad)
 
                 model = IsolationForest(
-                    n_estimators=300,
-                    contamination=0.1,
+                    n_estimators=200,
+                    contamination=0.15,   # 15% expected anomaly rate
                     random_state=42,
                     n_jobs=-1)
                 model.fit(X_scaled)

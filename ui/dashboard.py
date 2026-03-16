@@ -655,7 +655,7 @@ class DashboardScreen(ctk.CTkFrame):
             target=self._score_tick,
             daemon=True
         ).start()
-        self.after(15000, self._update_loop)
+        self.after(30000, self._update_loop)
 
     def _score_tick(self):
         if not self.baseline:
@@ -719,6 +719,9 @@ class DashboardScreen(ctk.CTkFrame):
         except Exception:
             pass
 
+            print(f"[LOCK CHECK] score={result['score']} "
+              f"should_lock={should_lock(result['score'])}")
+            
         # Lock trigger
         if should_lock(result['score']):
             self.lock_count += 1

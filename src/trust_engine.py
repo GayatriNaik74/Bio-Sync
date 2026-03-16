@@ -1,6 +1,7 @@
 """
 BioSync Phase 2 — Trust Engine
-Converts live keystroke data into a Trust Score (0-100).
+Combines Isolation Forest score WITH direct feature
+comparison against baseline for accurate detection.
 """
 
 import os
@@ -25,100 +26,121 @@ def load_baseline():
     print(f"  Threshold  : {baseline['threshold']:.4f}")
     return baseline
 
-# ── Score → Trust 0-100 ──────────────────────────────
+# ── Model score → Trust 0-100 ────────────────────────
 def score_to_trust(raw_score, baseline):
-    mean = baseline['mean_score']
-    std  = baseline['std_score']
-
-    # Normalise: how many std devs from mean
-    z = (raw_score - mean) / (std + 1e-9)
-
-    # Map z-score to trust
-    # z >= +1  → 95+  (very normal typing)
-    # z =   0  → 85   (normal)
-    # z =  -1  → 72   (slight variation)
-    # z =  -2  → 59   (MEDIUM — suspicious)
-    # z =  -3  → 46   (HIGH — likely intruder)
-    # z =  -4  → 33   (definite intruder)
-    trust = float(np.clip(85 + z * 13, 0, 100))
+    mean  = baseline['mean_score']
+    std   = baseline['std_score']
+    z     = (raw_score - mean) / (std + 1e-9)
+    trust = float(np.clip(85 + z * 10, 0, 100))
     return round(trust, 1)
 
-# ── Risk level from trust score ──────────────────────
+# ── Risk level ───────────────────────────────────────
 def get_risk_level(trust_score):
-    if trust_score >= 72:
+    if trust_score >= 55:
         return "LOW"
-    elif trust_score >= 55:
+    elif trust_score >= 40:
         return "MEDIUM"
     else:
         return "HIGH"
 
-# ── Feature distance scoring ─────────────────────────
-def _feature_distance_score(X_raw, baseline):
+# ── Direct feature comparison ────────────────────────
+def _direct_compare(live_features: dict,
+                    baseline: dict) -> float:
     """
-    Compare live features against baseline feat_mean.
-    Returns a penalty score 0-100 (higher = more different).
+    Directly compare live dwell/flight against
+    baseline averages.
+    Returns a trust score 0-100 based on how
+    close the live typing is to the baseline.
+
+    This catches intruders even when the IF model
+    gives similar scores.
     """
-    if 'feat_mean' not in baseline or 'feat_std' not in baseline:
-        return 0.0
+    if ('feat_mean' not in baseline or
+            'feat_std' not in baseline):
+        return 85.0
 
     feat_mean = np.array(baseline['feat_mean'])
     feat_std  = np.array(baseline['feat_std']) + 1e-9
 
-    n = min(X_raw.shape[1], len(feat_mean))
-    live    = X_raw[0, :n]
-    mean    = feat_mean[:n]
-    std     = feat_std[:n]
+    # Key feature indices (from extract_features order):
+    # 0  = dwell_mean
+    # 1  = dwell_std
+    # 7  = flight_mean
+    # 8  = flight_std
+    # 14 = dwell_flight_ratio
+    # 15 = total_keypresses
 
-    # Z-score each feature
-    z_scores = np.abs((live - mean) / std)
+    live_vals = list(live_features.values())
+    n = min(len(live_vals), len(feat_mean))
 
-    # Key features: dwell_mean(0), flight_mean(7)
-    # Weight them more heavily
-    weights = np.ones(n)
-    if n > 0:  weights[0] = 3.0   # dwell_mean
-    if n > 1:  weights[1] = 2.0   # dwell_std
-    if n > 7:  weights[7] = 3.0   # flight_mean
-    if n > 8:  weights[8] = 2.0   # flight_std
-    if n > 14: weights[14] = 2.0  # dwell_flight_ratio
+    if n == 0:
+        return 85.0
 
-    weighted_z = np.average(z_scores, weights=weights[:n])
-    return float(weighted_z)
+    live  = np.array(live_vals[:n])
+    mean  = feat_mean[:n]
+    std   = feat_std[:n]
+
+    # Focus on most discriminative features only
+    key_indices = [i for i in [0, 1, 7, 8, 14]
+                   if i < n]
+
+    if not key_indices:
+        return 85.0
+
+    # Z-score for each key feature
+    z_scores = np.abs(
+        (live[key_indices] - mean[key_indices]) /
+        std[key_indices]
+    )
+
+    # Mean z-score across key features
+    mean_z = float(np.mean(z_scores))
+
+    # Convert to trust score:
+    # mean_z = 0.0  → 90  (identical to baseline)
+    # mean_z = 0.5  → 85  (very close)
+    # mean_z = 1.0  → 80  (normal variation)
+    # mean_z = 1.5  → 72  (borderline)
+    # mean_z = 2.0  → 60  (suspicious)
+    # mean_z = 3.0  → 36  (likely intruder)
+    # mean_z = 4.0  → 12  (definite intruder)
+    direct_trust = float(np.clip(
+        90 - mean_z * 18, 0, 100))
+
+    return round(direct_trust, 1)
 
 # ── MAIN: score a window of events ───────────────────
 def compute_trust_score(event_log: list,
                         baseline: dict) -> dict:
-    # Empty buffer → assume normal (user not typing)
+
+    # Empty buffer → user not typing → stay normal
     if not event_log:
         return {
-            'score'       : 85.0,
-            'risk'        : 'LOW',
-            'raw_score'   : 0.0,
-            'top_features': [],
-            'keystrokes'  : 0
+            'score'      : 85.0,
+            'risk'       : 'LOW',
+            'raw_score'  : 0.0,
+            'keystrokes' : 0
         }
 
-    # Build DataFrame
     df = pd.DataFrame(event_log)
     if 'timestamp_ms' not in df.columns:
         return {
-            'score'       : 85.0,
-            'risk'        : 'LOW',
-            'raw_score'   : 0.0,
-            'top_features': [],
-            'keystrokes'  : 0
+            'score'      : 85.0,
+            'risk'       : 'LOW',
+            'raw_score'  : 0.0,
+            'keystrokes' : 0
         }
 
     dwell_df  = compute_dwell(df)
     flight_df = compute_flight(df)
 
-    # Too few keystrokes — don't penalise
-    if len(dwell_df) < 3:
+    # Too few keystrokes → stay normal
+    if len(dwell_df) < 3 or len(flight_df) < 3:
         return {
-            'score'       : 85.0,
-            'risk'        : 'LOW',
-            'raw_score'   : 0.0,
-            'top_features': [],
-            'keystrokes'  : len(dwell_df)
+            'score'      : 85.0,
+            'risk'       : 'LOW',
+            'raw_score'  : 0.0,
+            'keystrokes' : len(dwell_df)
         }
 
     features = extract_features(dwell_df, flight_df)
@@ -129,42 +151,39 @@ def compute_trust_score(event_log: list,
     n_cmu  = scaler.n_features_in_
     n_user = X_raw.shape[1]
     if n_user < n_cmu:
-        pad   = np.zeros((X_raw.shape[0], n_cmu - n_user))
+        pad   = np.zeros((X_raw.shape[0],
+                          n_cmu - n_user))
         X_pad = np.hstack([X_raw, pad])
     else:
         X_pad = X_raw[:, :n_cmu]
     X_scaled = scaler.transform(X_pad)
 
-    # Model score
-    model     = baseline['model']
-    raw_score = float(model.decision_function(X_scaled)[0])
+    # Score 1 — Isolation Forest
+    model      = baseline['model']
+    raw_score  = float(
+        model.decision_function(X_scaled)[0])
+    if_trust   = score_to_trust(raw_score, baseline)
 
-    # Feature distance score (direct comparison to baseline)
-    feat_dist = _feature_distance_score(X_raw, baseline)
+    # Score 2 — Direct feature comparison
+    direct_trust = _direct_compare(features, baseline)
 
-    # Combine model score with feature distance
-    # If features are very different → penalise more
-    model_trust = score_to_trust(raw_score, baseline)
+    # Final — weighted combination
+    # Direct comparison is more reliable for small datasets
+    final = round(
+        0.5 * if_trust + 0.5 * direct_trust, 1)
+    final = float(np.clip(final, 0, 100))
 
-    # Feature distance penalty
-    # feat_dist = 0   → no penalty
-    # feat_dist = 1   → small penalty (-5)
-    # feat_dist = 2   → medium penalty (-15)
-    # feat_dist = 3+  → large penalty (-30+)
-    penalty = min(40, float(feat_dist) * 12)
-    combined_trust = float(np.clip(model_trust - penalty, 0, 100))
-
-    # Final risk
-    risk = get_risk_level(combined_trust)
+    risk = get_risk_level(final)
 
     return {
-        'score'       : round(combined_trust, 1),
-        'risk'        : risk,
-        'raw_score'   : raw_score,
-        'top_features': [],
-        'keystrokes'  : len(dwell_df),
-        'feat_dist'   : round(feat_dist, 3),
+        'score'      : final,
+        'risk'       : risk,
+        'raw_score'  : raw_score,
+        'if_trust'   : if_trust,
+        'direct'     : direct_trust,
+        'keystrokes' : len(dwell_df),
     }
+
 
 # ── Demo test ─────────────────────────────────────────
 if __name__ == "__main__":
@@ -176,51 +195,86 @@ if __name__ == "__main__":
 
     baseline = load_baseline()
 
-    print("\n── Testing with YOUR typing pattern ──")
+    print("\n── Testing YOUR sessions ──")
     files = sorted(glob.glob("data/raw/session_*.csv"))
-    if files:
+    if not files:
+        print("  No session files found")
+    else:
+        for fpath in files:
+            with open(fpath) as f:
+                events = []
+                for r in csv.DictReader(f):
+                    evt = {
+                        'timestamp_ms':
+                            int(r['timestamp_ms']),
+                        'key'        : r['key'],
+                        'event_type' : r['event_type'],
+                    }
+                    if r.get('dwell_ms'):
+                        evt['dwell_ms'] = float(
+                            r['dwell_ms'])
+                    if r.get('flight_ms'):
+                        evt['flight_ms'] = float(
+                            r['flight_ms'])
+                    events.append(evt)
+
+            r = compute_trust_score(events, baseline)
+            print(f"  {os.path.basename(fpath)[-22:]}"
+                  f" → final={r['score']}"
+                  f" if={r['if_trust']}"
+                  f" direct={r['direct']}"
+                  f" risk={r['risk']}")
+
+        print("\n── 30-second windows ──")
         with open(files[0]) as f:
-            reader = csv.DictReader(f)
-            events = []
-            for r in reader:
+            all_ev = []
+            for r in csv.DictReader(f):
                 evt = {
                     'timestamp_ms': int(r['timestamp_ms']),
-                    'key'         : r['key'],
-                    'event_type'  : r['event_type'],
+                    'key'        : r['key'],
+                    'event_type' : r['event_type'],
                 }
                 if r.get('dwell_ms'):
-                    evt['dwell_ms']  = float(r['dwell_ms'])
+                    evt['dwell_ms'] = float(r['dwell_ms'])
                 if r.get('flight_ms'):
                     evt['flight_ms'] = float(r['flight_ms'])
-                events.append(evt)
+                all_ev.append(evt)
 
-        result = compute_trust_score(events, baseline)
-        print(f"  Trust Score  : {result['score']}")
-        print(f"  Risk Level   : {result['risk']}")
-        print(f"  Raw Score    : {result['raw_score']:.4f}")
-        print(f"  Feat Distance: {result.get('feat_dist', 'N/A')}")
-        print(f"  Keypresses   : {result['keystrokes']}")
+        for start in range(0, min(len(all_ev),120), 30):
+            chunk = all_ev[start:start+30]
+            r = compute_trust_score(chunk, baseline)
+            print(f"  w{start:3d}-{start+30:3d}"
+                  f" → final={r['score']}"
+                  f" direct={r['direct']}"
+                  f" risk={r['risk']}"
+                  f" keys={r['keystrokes']}")
 
-    print("\n── Testing with INTRUDER (fast robotic typing) ──")
-    intruder = [
-        {'key': c, 'dwell_ms': 18, 'flight_ms': 12,
-         'event_type': 'press',
-         'timestamp_ms': i * 30}
-        for i, c in enumerate("authentication systems verify user identity")
+    print("\n── INTRUDER tests ──")
+
+    tests = [
+        ("Fast robot   ",
+         [{'key':c,'dwell_ms':15,'flight_ms':10,
+           'event_type':'press',
+           'timestamp_ms':i*25}
+          for i,c in enumerate(
+              "the quick brown fox jumps over")]),
+        ("Hunt-and-peck",
+         [{'key':c,'dwell_ms':320,'flight_ms':480,
+           'event_type':'press',
+           'timestamp_ms':i*800}
+          for i,c in enumerate(
+              "the quick brown fox jumps over")]),
+        ("Medium speed ",
+         [{'key':c,'dwell_ms':190,'flight_ms':220,
+           'event_type':'press',
+           'timestamp_ms':i*410}
+          for i,c in enumerate(
+              "the quick brown fox jumps over")]),
     ]
-    r2 = compute_trust_score(intruder, baseline)
-    print(f"  Trust Score  : {r2['score']}")
-    print(f"  Risk Level   : {r2['risk']}")
-    print(f"  Feat Distance: {r2.get('feat_dist', 'N/A')}")
 
-    print("\n── Testing with INTRUDER (slow hunt-and-peck) ──")
-    intruder2 = [
-        {'key': c, 'dwell_ms': 280, 'flight_ms': 450,
-         'event_type': 'press',
-         'timestamp_ms': i * 730}
-        for i, c in enumerate("authentication systems verify user identity")
-    ]
-    r3 = compute_trust_score(intruder2, baseline)
-    print(f"  Trust Score  : {r3['score']}")
-    print(f"  Risk Level   : {r3['risk']}")
-    print(f"  Feat Distance: {r3.get('feat_dist', 'N/A')}")
+    for label, evts in tests:
+        r = compute_trust_score(evts, baseline)
+        print(f"  {label}"
+              f" → final={r['score']}"
+              f" direct={r['direct']}"
+              f" risk={r['risk']}")
