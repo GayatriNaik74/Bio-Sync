@@ -20,6 +20,8 @@ PARAGRAPHS = [
     "Authentication systems verify user identity through behavioral patterns and biometric signals. Keystroke dynamics capture the unique rhythm of each individual typing on a keyboard device naturally.",
     "Machine learning models analyse timing intervals between consecutive keystrokes to detect anomalies. Continuous authentication ensures security without interrupting the natural workflow of any user.",
     "Neural networks trained on typing patterns can distinguish between authorised users and potential intruders. The dwell time and flight time features form the core of behavioral biometric authentication systems.",
+    "Two driven jocks help fax my big quiz. Five quacking zephyrs jolt my wax bed. The jay pig fox zebra and my wolves quack. Sympathizing would fix Quaker objectives.",
+    "Sphinx of black quartz judge my vow before the dawn breaks over the silver hills. We promptly judged antique ivory buckles for the next prize as the sun slowly rose above the misty valley.",
 ]
 
 USERS_FILE   = "data/users.json"
@@ -47,7 +49,7 @@ class EnrollmentScreen(ctk.CTkFrame):
         self.app            = app
         self.state          = state
         self.current_step   = 0
-        self.total_steps    = 3
+        self.total_steps    = 5
         self.para_text      = ""
         self.typed_pos      = 0
         self.events         = []
@@ -72,7 +74,7 @@ class EnrollmentScreen(ctk.CTkFrame):
             text_color="#60a5fa"
         ).pack(side="left", padx=24)
         ctk.CTkLabel(hdr,
-            text="ENROLLMENT  ·  3 sessions × 2 min",
+            text="ENROLLMENT  ·  5 sessions × 2 min",
             font=("JetBrains Mono", 9),
             text_color=C_DIM
         ).pack(side="right", padx=24)
@@ -93,7 +95,7 @@ class EnrollmentScreen(ctk.CTkFrame):
         dots_f = ctk.CTkFrame(top, fg_color="transparent")
         dots_f.pack(side="right")
         self.step_dots = []
-        for i in range(3):
+        for i in range(5):
             f = ctk.CTkFrame(dots_f,
                              fg_color="transparent")
             f.pack(side="left", padx=10)
