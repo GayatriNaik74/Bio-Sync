@@ -17,12 +17,17 @@ from features import (load_events, compute_dwell,
 
 # ── Paragraphs ───────────────────────────────────────
 PARAGRAPHS = [
-    "Authentication systems verify user identity through behavioral patterns and biometric signals. Keystroke dynamics capture the unique rhythm of each individual typing on a keyboard device naturally.",
-    "Machine learning models analyse timing intervals between consecutive keystrokes to detect anomalies. Continuous authentication ensures security without interrupting the natural workflow of any user.",
-    "Neural networks trained on typing patterns can distinguish between authorised users and potential intruders. The dwell time and flight time features form the core of behavioral biometric authentication systems.",
-    "Two driven jocks help fax my big quiz. Five quacking zephyrs jolt my wax bed. The jay pig fox zebra and my wolves quack. Sympathizing would fix Quaker objectives.",
-    "Sphinx of black quartz judge my vow before the dawn breaks over the silver hills. We promptly judged antique ivory buckles for the next prize as the sun slowly rose above the misty valley.",
+    "The authentication system verifies the identity of the user through continuous monitoring of their typing patterns. Each keystroke contains information about the individual entering the text on the keyboard.",
+
+    "Continuous authentication ensures that the person entering the data is the same individual who enrolled in the system. The typing rhythm contains information that identifies the user throughout the entire session.",
+
+    "Behavioral biometrics analyse the natural patterns in human interaction with computing devices. Keystroke dynamics measure the timing between individual key presses and releases to establish a unique profile.",
+
+    "The isolation forest algorithm detects anomalies in the feature space by identifying observations that are statistically different from the baseline profile established during the enrollment process.",
+
+    "Authentication through keystroke dynamics provides continuous verification without interrupting the natural workflow of the user. The system monitors dwell time, flight time, and transition patterns between consecutive keystrokes throughout the entire working session.",
 ]
+
 
 USERS_FILE   = "data/users.json"
 RAW_DIR      = "data/raw"
