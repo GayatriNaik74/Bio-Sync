@@ -17,8 +17,19 @@ import customtkinter as ctk
 import tkinter as tk
 import threading, datetime, math
 from pynput import keyboard
-
-from trust_engine      import compute_trust_score, load_baseline
+from mouse_features import (
+    build_listener   as build_mouse_listener,
+    get_events       as get_mouse_events,
+    clear_buffer     as clear_mouse_buffer,
+    start_collecting as mouse_start,
+    stop_collecting  as mouse_stop,
+    get_display_values,
+    extract_mouse_features,
+    compute_mouse_trust,
+)
+from trust_engine import (compute_trust_score,
+                           load_baseline,
+                           get_risk_level)
 from lock_manager      import should_lock
 from blockchain_bridge import handle_trust_score
 
@@ -279,9 +290,21 @@ class DashboardScreen(ctk.CTkFrame):
         self.last_dwell     = 0.0
         self.last_flight    = 0.0
         self.wpm            = 0.0
+        self._ema_score      = 85.0
+        self._ema_alpha      = 0.5
+        self._low_streak     = 0
+        self._verified_events= []
         self._press_times   = {}
         self._last_press    = None
         self._kb_listener   = None
+        self._mouse_listener     = None
+        self._mouse_baseline     = {}
+        self._mouse_baseline_std = {}
+        self._mouse_trust        = 85.0
+        self._ema_score          = 85.0
+        self._ema_alpha          = 0.5
+        self._low_streak         = 0
+        self._verified_events    = []
         self._build()
 
     # ─────────────────────────────────────────────────
@@ -344,6 +367,46 @@ class DashboardScreen(ctk.CTkFrame):
         self._kb_listener.daemon = True
         self._kb_listener.start()
 
+    def _start_mouse_listener(self):
+        if self._mouse_listener:
+            try:
+                self._mouse_listener.stop()
+            except Exception:
+                pass
+        clear_mouse_buffer()
+        mouse_start()
+        self._mouse_listener = build_mouse_listener()
+        self._mouse_listener.start()
+
+    def _build_mouse_baseline(self):
+        
+        if not hasattr(self, '_mouse_baseline_raw'):
+            self._mouse_baseline_raw = []
+ 
+        events = get_mouse_events()
+        feats  = extract_mouse_features(events)
+ 
+        if feats is None:
+            return
+ 
+        self._mouse_baseline_raw.append(feats)
+ 
+        if len(self._mouse_baseline_raw) >= 5:
+            # Compute mean and std across windows
+            all_keys = list(
+                self._mouse_baseline_raw[0].keys())
+            for k in all_keys:
+                vals = [f[k]
+                        for f in
+                        self._mouse_baseline_raw
+                        if k in f]
+                self._mouse_baseline[k]     = float(
+                    np.mean(vals))
+                self._mouse_baseline_std[k] = float(
+                    np.std(vals) + 1e-9)
+            self._add_activity(
+                "Mouse baseline built", C_GREEN)
+            
     # ─────────────────────────────────────────────────
     def on_show(self):
         if os.path.exists("models/user_baseline.pkl"):
@@ -364,6 +427,7 @@ class DashboardScreen(ctk.CTkFrame):
         self._add_activity("User authenticated", C_BLUE)
         self._add_activity("Biometric model loaded", C_GREEN)
         self._start_listener()
+        self._start_mouse_listener()
 
     # ─────────────────────────────────────────────────
     # BUILD UI
@@ -490,37 +554,76 @@ class DashboardScreen(ctk.CTkFrame):
                                    fg_color="transparent")
         cards_frame.pack(fill="x", pady=(0, 12))
 
-        self.param_labels = {}
-        params = [
-            ("⚡  Avg Speed",   "wpm",      "0 WPM", C_BLUE),
-            ("✓   Accuracy",    "accuracy", "—",     C_GREEN),
-            ("📊  Rhythm",      "rhythm",   "—",     C_BLUE),
-            ("⏱   Key Hold",    "dwell",    "— ms",  C_DIM),
-            ("✈   Flight",      "flight",   "— ms",  C_DIM),
-            ("⚠   Risk Level",  "risk",     "LOW",   C_GREEN),
-        ]
-        for i, (label, key, default, color) in \
-                enumerate(params):
-            row = i // 3
-            col = i % 3
-            card = ctk.CTkFrame(cards_frame,
-                fg_color=C_CARD,
-                corner_radius=10,
-                border_width=1,
-                border_color=C_BORDER)
-            card.grid(row=row, column=col,
-                      padx=5, pady=5, sticky="nsew")
-            cards_frame.columnconfigure(col, weight=1)
-            ctk.CTkLabel(card, text=label,
-                font=("Syne", 11),
-                text_color=color
-            ).pack(anchor="w", padx=14, pady=(12, 2))
-            lbl = ctk.CTkLabel(card, text=default,
-                font=("Syne", 20, "bold"),
-                text_color="white")
-            lbl.pack(anchor="w", padx=14,
-                     pady=(0, 12))
-            self.param_labels[key] = lbl
+        # ── Keystroke trust score ─────────────────
+        result = compute_trust_score(
+            events, self.baseline)
+        kb_score = result['score']
+ 
+        # ── EMA smoothing ─────────────────────────
+        self._ema_score = (
+            self._ema_alpha * kb_score +
+            (1 - self._ema_alpha) * self._ema_score)
+        kb_score = round(self._ema_score, 1)
+ 
+        # ── Mouse trust score ─────────────────────
+        mouse_events = get_mouse_events()
+        clear_mouse_buffer()
+        mouse_feats = extract_mouse_features(
+            mouse_events)
+ 
+        if (mouse_feats and
+                self._mouse_baseline):
+            self._mouse_trust = compute_mouse_trust(
+                mouse_feats,
+                self._mouse_baseline,
+                self._mouse_baseline_std)
+        else:
+            self._mouse_trust = 85.0
+ 
+        # ── Combined final score ──────────────────
+        # 70% keystroke + 30% mouse
+        if self._mouse_baseline:
+            final_score = round(
+                0.70 * kb_score +
+                0.30 * self._mouse_trust, 1)
+        else:
+            # No mouse baseline yet — use kb only
+            final_score = kb_score
+ 
+        final_score = float(
+            max(0, min(100, final_score)))
+        risk = get_risk_level(final_score)
+        result['score'] = final_score
+        result['risk']  = risk
+ 
+        self.state['trust_score'] = final_score
+        self.state['risk_level']  = risk
+ 
+        # ── Store mouse display values ─────────────
+        self._mouse_display = get_display_values(
+            mouse_events)
+ 
+        # ── Rolling baseline update ───────────────
+        if risk == 'LOW':
+            self._low_streak += 1
+            self._verified_events.extend(events)
+            if self._low_streak >= 5:
+                self._low_streak = 0
+                verified = self._verified_events.copy()
+                self._verified_events = []
+                def _upd(evts=verified):
+                    from trust_engine import (
+                        update_baseline_rolling)
+                    self.baseline = (
+                        update_baseline_rolling(
+                            evts, self.baseline,
+                            'models/user_baseline.pkl'))
+                threading.Thread(
+                    target=_upd,
+                    daemon=True).start()
+        else:
+            self._low_streak = 0
+            self._verified_events = []
 
         # Threat timeline
         tl_card = ctk.CTkFrame(main,
@@ -686,12 +789,77 @@ class DashboardScreen(ctk.CTkFrame):
             (self.keypress_count / 5) / (up / 60), 1)
 
         # Trust score
-        result = compute_trust_score(events, self.baseline)
-        self.state['trust_score'] = result['score']
-        self.state['risk_level']  = result['risk']
-
-        risk = result['risk']
-
+        # ── Keystroke trust score ─────────────────
+        result = compute_trust_score(
+            events, self.baseline)
+        kb_score = result['score']
+ 
+        # ── EMA smoothing ─────────────────────────
+        self._ema_score = (
+            self._ema_alpha * kb_score +
+            (1 - self._ema_alpha) * self._ema_score)
+        kb_score = round(self._ema_score, 1)
+ 
+        # ── Mouse trust score ─────────────────────
+        mouse_events = get_mouse_events()
+        clear_mouse_buffer()
+        mouse_feats = extract_mouse_features(
+            mouse_events)
+ 
+        if (mouse_feats and
+                self._mouse_baseline):
+            self._mouse_trust = compute_mouse_trust(
+                mouse_feats,
+                self._mouse_baseline,
+                self._mouse_baseline_std)
+        else:
+            self._mouse_trust = 85.0
+ 
+        # ── Combined final score ──────────────────
+        # 70% keystroke + 30% mouse
+        if self._mouse_baseline:
+            final_score = round(
+                0.70 * kb_score +
+                0.30 * self._mouse_trust, 1)
+        else:
+            # No mouse baseline yet — use kb only
+            final_score = kb_score
+ 
+        final_score = float(
+            max(0, min(100, final_score)))
+        risk = get_risk_level(final_score)
+        result['score'] = final_score
+        result['risk']  = risk
+ 
+        self.state['trust_score'] = final_score
+        self.state['risk_level']  = risk
+ 
+        # ── Store mouse display values ─────────────
+        self._mouse_display = get_display_values(
+            mouse_events)
+ 
+        # ── Rolling baseline update ───────────────
+        if risk == 'LOW':
+            self._low_streak += 1
+            self._verified_events.extend(events)
+            if self._low_streak >= 5:
+                self._low_streak = 0
+                verified = self._verified_events.copy()
+                self._verified_events = []
+                def _upd(evts=verified):
+                    from trust_engine import (
+                        update_baseline_rolling)
+                    self.baseline = (
+                        update_baseline_rolling(
+                            evts, self.baseline,
+                            'models/user_baseline.pkl'))
+                threading.Thread(
+                    target=_upd,
+                    daemon=True).start()
+        else:
+            self._low_streak = 0
+            self._verified_events = []
+            
         # Anomaly logging
         if risk in ('MEDIUM', 'HIGH'):
             self.anomaly_count += 1
@@ -787,6 +955,32 @@ class DashboardScreen(ctk.CTkFrame):
             text=f"{self.last_flight:.0f} ms")
         self.param_labels['risk'].configure(
             text=risk, text_color=color)
+        
+        # ── Mouse card updates ────────────────────
+        md = getattr(self, '_mouse_display', {})
+        if md:
+            self.mouse_labels['m_vel'].configure(
+                text=md.get('velocity','— px/s'))
+            self.mouse_labels['m_curve'].configure(
+                text=md.get('curve','—'))
+            self.mouse_labels['m_clicks'].configure(
+                text=md.get('clicks','0'))
+            self.mouse_labels['m_scrolls'].configure(
+                text=md.get('scrolls','0'))
+            self.mouse_labels['m_idle'].configure(
+                text=md.get('idle','— ms'))
+ 
+        # Mouse trust score bar
+        mt = getattr(self, '_mouse_trust', 85.0)
+        mt_color = (C_GREEN  if mt >= 70
+                    else C_AMBER if mt >= 55
+                    else C_RED)
+        self.mouse_trust_lbl.configure(
+            text=f"{mt:.0f} / 100",
+            text_color=mt_color)
+        self.mouse_bar.configure(
+            progress_color=mt_color)
+        self.mouse_bar.set(mt / 100)
 
         # Timeline
         ts = datetime.datetime.now()\
@@ -887,6 +1081,12 @@ class DashboardScreen(ctk.CTkFrame):
         if self._kb_listener:
             try:
                 self._kb_listener.stop()
+            except Exception:
+                pass
+        mouse_stop()
+        if self._mouse_listener:
+            try:
+                self._mouse_listener.stop()
             except Exception:
                 pass
         self.app.show_screen("login")

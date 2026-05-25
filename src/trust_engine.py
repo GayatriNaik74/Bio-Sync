@@ -43,7 +43,32 @@ def get_risk_level(trust_score):
         return "MEDIUM"
     else:
         return "HIGH"
-
+# ── ADD BEFORE _direct_compare ───────────
+def _speed_plausibility(live_features: dict,
+                         baseline: dict) -> float:
+    """
+    Quick check: is the typing speed within
+    reasonable range of the baseline?
+    Returns penalty 0-40 (0 = no penalty).
+    """
+    if 'feat_mean' not in baseline:
+        return 0.0
+    feat_names = list(live_features.keys())
+    feat_mean  = np.array(baseline['feat_mean'])
+    penalty    = 0.0
+    if 'wpm_estimate' in feat_names:
+        idx = feat_names.index('wpm_estimate')
+        if idx < len(feat_mean) and feat_mean[idx] > 0:
+            live_wpm = live_features['wpm_estimate']
+            base_wpm = feat_mean[idx]
+            ratio    = live_wpm / (base_wpm + 0.1)
+            # More than 3x faster or slower
+            if ratio > 3.0 or ratio < 0.33:
+                penalty += 30.0
+            elif ratio > 2.0 or ratio < 0.50:
+                penalty += 15.0
+    return penalty
+# ─────────────────────────────────────────
 # ── Direct feature comparison ────────────────────────
 def _direct_compare(live_features: dict,
                     baseline: dict) -> float:
@@ -156,7 +181,13 @@ def compute_trust_score(event_log: list,
     direct_trust = _direct_compare(
         features, baseline)
 
-    # Combined score
+    # ── Speed plausibility penalty ────────
+    speed_penalty = _speed_plausibility(
+        features, baseline)
+    direct_trust  = max(0,
+        direct_trust - speed_penalty)
+    # ─────────────────────────────────────
+
     final = round(
         0.5 * if_trust + 0.5 * direct_trust, 1)
     final = float(np.clip(final, 0, 100))
@@ -267,3 +298,44 @@ if __name__ == "__main__":
               f" → final={r['score']}"
               f" direct={r.get('direct','?')}"
               f" risk={r['risk']}")
+    
+    # ── ADD AT BOTTOM OF FILE ────────────────
+def update_baseline_rolling(new_events: list,
+                             baseline: dict,
+                             baseline_path: str) -> dict:
+    """
+    Silently update baseline with verified genuine
+    typing windows. Called after 5 consecutive LOW
+    risk windows — blends new data into baseline.
+    """
+    import pandas as pd
+    from features import (compute_dwell,
+                          compute_flight,
+                          extract_features)
+    try:
+        df        = pd.DataFrame(new_events)
+        dwell_df  = compute_dwell(df)
+        flight_df = compute_flight(df)
+
+        if len(dwell_df) < 10:
+            return baseline
+
+        new_feat = extract_features(
+            dwell_df, flight_df, df_raw=df)
+        new_vals = np.array(
+            list(new_feat.values()))
+
+        old_mean = np.array(baseline['feat_mean'])
+        n = min(len(old_mean), len(new_vals))
+
+        # 90% old baseline, 10% new data
+        updated = (0.90 * old_mean[:n] +
+                   0.10 * new_vals[:n])
+        baseline['feat_mean'] = updated.tolist()
+        baseline['n_windows'] = (
+            baseline.get('n_windows', 15) + 1)
+
+        joblib.dump(baseline, baseline_path)
+        return baseline
+    except Exception:
+        return baseline

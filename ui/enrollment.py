@@ -27,6 +27,15 @@ PARAGRAPHS = [
 
     "Authentication through keystroke dynamics provides continuous verification without interrupting the natural workflow of the user. The system monitors dwell time, flight time, and transition patterns between consecutive keystrokes throughout the entire working session.",
 ]
+# ── ADD AFTER PARAGRAPHS LIST ────────────
+SESSION_TIPS = [
+    "Type naturally at your normal everyday speed",
+    "Type as you would type a casual message or email",
+    "Type carefully as you would in a formal document",
+    "Type quickly — don't worry about small mistakes",
+    "Type at your most comfortable, natural pace",
+]
+# ─────────────────────────────────────────
 
 
 USERS_FILE   = "data/users.json"
@@ -234,6 +243,12 @@ class EnrollmentScreen(ctk.CTkFrame):
             font=("JetBrains Mono", 10),
             text_color=C_DIM)
         self.status_lbl.pack(pady=(0, 12))
+        self.tip_lbl = ctk.CTkLabel(body,
+            text="",
+            font=("JetBrains Mono", 9),
+            text_color=C_AMBER)
+        self.tip_lbl.pack(pady=(0, 8))
+
 
         # ── Tip ──────────────────────────────────────
         ctk.CTkLabel(body,
@@ -309,6 +324,9 @@ class EnrollmentScreen(ctk.CTkFrame):
         dot, lbl = self.step_dots[self.current_step]
         dot.configure(text="◉", text_color=C_AMBER)
         lbl.configure(text_color=C_AMBER)
+        self.tip_lbl.configure(
+        text=f"💡 Tip: "
+            f"{SESSION_TIPS[self.current_step]}")
 
         self._render_para()
         self.para_counter.configure(

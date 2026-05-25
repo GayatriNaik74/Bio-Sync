@@ -280,6 +280,15 @@ def extract_features(dwell_df, flight_df,
         'burst_ratio'       : float(
             np.sum(f < 80) / (len(f) + 1)),
     }
+    total_time_sec = float(np.sum(f) / 1000) if len(f) > 0 else 1.0
+    features['wpm_estimate'] = float(
+        (len(d) / 5) / max(total_time_sec / 60, 0.01))
+    features['typing_consistency'] = float(
+        1 / (np.std(d) / (np.mean(d) + 1) + 1))
+    features['word_pause_ratio'] = float(
+        np.sum(f > 300) / (len(f) + 1))
+    features['flight_regularity'] = float(
+        np.std(f) / (np.mean(f) + 1))
 
     # ── Add digraph + trigraph if raw df provided ──
     if df_raw is not None:
