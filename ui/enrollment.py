@@ -27,7 +27,6 @@ PARAGRAPHS = [
 
     "Authentication through keystroke dynamics provides continuous verification without interrupting the natural workflow of the user. The system monitors dwell time, flight time, and transition patterns between consecutive keystrokes throughout the entire working session.",
 ]
-# ── ADD AFTER PARAGRAPHS LIST ────────────
 SESSION_TIPS = [
     "Type naturally at your normal everyday speed",
     "Type as you would type a casual message or email",
@@ -35,7 +34,6 @@ SESSION_TIPS = [
     "Type quickly — don't worry about small mistakes",
     "Type at your most comfortable, natural pace",
 ]
-# ─────────────────────────────────────────
 
 
 USERS_FILE   = "data/users.json"
@@ -249,8 +247,6 @@ class EnrollmentScreen(ctk.CTkFrame):
             text_color=C_AMBER)
         self.tip_lbl.pack(pady=(0, 8))
 
-
-        # ── Tip ──────────────────────────────────────
         ctk.CTkLabel(body,
             text="💡 Type naturally as you would normally"
                  " — don't try to type perfectly",
@@ -303,7 +299,6 @@ class EnrollmentScreen(ctk.CTkFrame):
         self._update_status(
             "5 sessions × 2 minutes  ·  "
             "type naturally, don't rush", C_DIM)
-        # Pre-load first paragraph
         self.para_text = PARAGRAPHS[0]
         self._render_para()
         self.para_counter.configure(
@@ -417,7 +412,8 @@ class EnrollmentScreen(ctk.CTkFrame):
                 text="⏳  Training model...",
                 fg_color="#0d0d16",
                 text_color=C_DIM)
-            self.after(600, self._train_inline)
+            # ── FIX: small delay so UI repaints, then train
+            self.after(400, self._train_inline)
         else:
             self._update_status(
                 f"✓  Session {self.current_step} "
@@ -547,9 +543,11 @@ class EnrollmentScreen(ctk.CTkFrame):
             f" → {os.path.basename(path)}", C_GREEN)
 
     # ─────────────────────────────────────────────────
-    # INLINE TRAINING — no subprocess
+    # INLINE TRAINING — runs in background thread
     # ─────────────────────────────────────────────────
     def _train_inline(self):
+        # All self.after() calls MUST happen on the
+        # main thread — schedule them via after(0, fn)
         def _thread():
             try:
                 files = sorted(glob.glob(
@@ -592,11 +590,15 @@ class EnrollmentScreen(ctk.CTkFrame):
                     X_pad = X_raw[:, :n_cmu]
                 X_scaled = scaler.transform(X_pad)
 
+                # ── FIX: n_estimators=35, n_jobs=1
+                # n_jobs=-1 spawns processes which is
+                # slower than single-core for 5 samples.
+                # 35 trees is enough for 5 data points.
                 model = IsolationForest(
-                    n_estimators=200,
-                    contamination=0.15,   # 15% expected anomaly rate
+                    n_estimators=35,
+                    contamination=0.1,
                     random_state=42,
-                    n_jobs=-1)
+                    n_jobs=1)
                 model.fit(X_scaled)
                 scores = model.decision_function(
                     X_scaled)
@@ -618,7 +620,7 @@ class EnrollmentScreen(ctk.CTkFrame):
                 os.makedirs("models", exist_ok=True)
                 joblib.dump(baseline, BASELINE_OUT)
 
-                # Mark enrolled
+                # Mark enrolled in users.json
                 if os.path.exists(USERS_FILE):
                     with open(USERS_FILE) as f:
                         users = json.load(f)
@@ -628,21 +630,36 @@ class EnrollmentScreen(ctk.CTkFrame):
                         with open(USERS_FILE,"w") as f:
                             json.dump(users, f,
                                       indent=2)
+
+                # Notify admin logger
+                try:
+                    from admin_logger import set_enrolled_date
+                    set_enrolled_date(
+                        self.state.get("username", ""))
+                except Exception:
+                    pass
+
                 self.state["enrolled"] = True
-                self.after(0, lambda: self._update_status(
-                    "✓  Model trained! "
-                    "Launching dashboard...",
-                    C_GREEN))
-                self.after(1200, lambda:
-                    self.app.show_screen("dashboard"))
+
+                # ── FIX: schedule UI updates on main
+                # thread only via after(0, callable)
+                self.after(0, self._on_training_done)
 
             except Exception as e:
-                self.after(0, lambda:
-                    self._update_status(
-                        f"Error: {e}", C_RED))
+                err = str(e)
+                self.after(0, lambda: self._update_status(
+                    f"✗ Training error: {err}", C_RED))
 
         threading.Thread(
             target=_thread, daemon=True).start()
+
+    def _on_training_done(self):
+        """Called on the main thread after training succeeds."""
+        self._update_status(
+            "✓  Model trained! Launching dashboard...",
+            C_GREEN)
+        self.after(800, lambda:
+            self.app.show_screen("dashboard"))
 
     def _update_status(self, text, color=None):
         kw = {"text": text}

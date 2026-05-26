@@ -26,6 +26,7 @@ APP_STATE = {
     'risk_level'    : 'LOW',
     'baseline_path' : 'models/user_baseline.pkl',
     'monitoring'    : False,
+    'is_admin'      : False,
 }
  
 class BioSyncApp(ctk.CTk):
@@ -53,6 +54,7 @@ class BioSyncApp(ctk.CTk):
         from ui.dashboard    import DashboardScreen
         from ui.lock_screen  import LockScreen
         from ui.profile_screen import ProfileScreen
+        from ui.admin_dashboard import AdminDashboard
  
         for name, Cls in [
             ("login",      LoginScreen),
@@ -60,6 +62,7 @@ class BioSyncApp(ctk.CTk):
             ("dashboard",  DashboardScreen),
             ("lock",       LockScreen),
             ("profile",    ProfileScreen),
+            ("admin_dashboard", AdminDashboard),
         ]:
             frame = Cls(
                 parent=self.container,
@@ -69,6 +72,12 @@ class BioSyncApp(ctk.CTk):
             self.frames[name] = frame
  
     def show_screen(self, name: str):
+    # Hide current screen if it has on_hide
+        for frame in self.frames.values():
+            if (frame.winfo_ismapped() and
+                    hasattr(frame, 'on_hide')):
+                frame.on_hide()
+
         frame = self.frames[name]
         frame.tkraise()
         if hasattr(frame, 'on_show'):

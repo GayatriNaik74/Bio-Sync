@@ -30,8 +30,15 @@ from mouse_features import (
 from trust_engine import (compute_trust_score,
                            load_baseline,
                            get_risk_level)
-from lock_manager      import should_lock
-from blockchain_bridge import handle_trust_score
+from lock_manager import should_lock
+try:
+    from blockchain_bridge import handle_trust_score as _bc_handle
+    def handle_trust_score(sid, score, risk):
+        return _bc_handle(sid, score, risk)
+except Exception:
+    def handle_trust_score(sid, score, risk):
+        return {}
+from admin_logger import log_event as admin_log
 
 # ── Keystroke buffer ─────────────────────────────────
 _event_buffer = []
@@ -409,13 +416,15 @@ class DashboardScreen(ctk.CTkFrame):
             
     # ─────────────────────────────────────────────────
     def on_show(self):
+        # Stop any running loop and clear stale keystrokes from enrollment
+        self.monitoring = False
+        _event_buffer.clear()
+
         if os.path.exists("models/user_baseline.pkl"):
-            if self.baseline is None:          # ← ADD THIS CHECK
-                self.baseline = load_baseline()
+            self.baseline = load_baseline()
             self.monitoring = True
-            if not hasattr(self, '_loop_running'):  # ← ADD THIS
-                self._loop_running = True
-                self._update_loop()
+            self._update_loop()
+
         uname = self.state.get('username', 'user')
         self.user_lbl.configure(text=uname)
         self.start_time     = datetime.datetime.now()
@@ -549,82 +558,108 @@ class DashboardScreen(ctk.CTkFrame):
             text_color=C_GREEN)
         self.status_lbl.pack(pady=(0, 16))
 
-        # 6 Parameter cards
+    # ── 6 Keystroke parameter cards ───────────
         cards_frame = ctk.CTkFrame(main,
-                                   fg_color="transparent")
-        cards_frame.pack(fill="x", pady=(0, 12))
+            fg_color="transparent")
+        cards_frame.pack(fill="x", pady=(0,12))
 
-        # ── Keystroke trust score ─────────────────
-        result = compute_trust_score(
-            events, self.baseline)
-        kb_score = result['score']
- 
-        # ── EMA smoothing ─────────────────────────
-        self._ema_score = (
-            self._ema_alpha * kb_score +
-            (1 - self._ema_alpha) * self._ema_score)
-        kb_score = round(self._ema_score, 1)
- 
-        # ── Mouse trust score ─────────────────────
-        mouse_events = get_mouse_events()
-        clear_mouse_buffer()
-        mouse_feats = extract_mouse_features(
-            mouse_events)
- 
-        if (mouse_feats and
-                self._mouse_baseline):
-            self._mouse_trust = compute_mouse_trust(
-                mouse_feats,
-                self._mouse_baseline,
-                self._mouse_baseline_std)
-        else:
-            self._mouse_trust = 85.0
- 
-        # ── Combined final score ──────────────────
-        # 70% keystroke + 30% mouse
-        if self._mouse_baseline:
-            final_score = round(
-                0.70 * kb_score +
-                0.30 * self._mouse_trust, 1)
-        else:
-            # No mouse baseline yet — use kb only
-            final_score = kb_score
- 
-        final_score = float(
-            max(0, min(100, final_score)))
-        risk = get_risk_level(final_score)
-        result['score'] = final_score
-        result['risk']  = risk
- 
-        self.state['trust_score'] = final_score
-        self.state['risk_level']  = risk
- 
-        # ── Store mouse display values ─────────────
-        self._mouse_display = get_display_values(
-            mouse_events)
- 
-        # ── Rolling baseline update ───────────────
-        if risk == 'LOW':
-            self._low_streak += 1
-            self._verified_events.extend(events)
-            if self._low_streak >= 5:
-                self._low_streak = 0
-                verified = self._verified_events.copy()
-                self._verified_events = []
-                def _upd(evts=verified):
-                    from trust_engine import (
-                        update_baseline_rolling)
-                    self.baseline = (
-                        update_baseline_rolling(
-                            evts, self.baseline,
-                            'models/user_baseline.pkl'))
-                threading.Thread(
-                    target=_upd,
-                    daemon=True).start()
-        else:
-            self._low_streak = 0
-            self._verified_events = []
+        self.param_labels = {}
+        params = [
+            ("⚡  Avg Speed",  "wpm",      "0 WPM", C_BLUE),
+            ("✓   Accuracy",   "accuracy", "—",     C_GREEN),
+            ("📊  Rhythm",     "rhythm",   "—",     C_BLUE),
+            ("⏱   Key Hold",   "dwell",    "— ms",  C_DIM),
+            ("✈   Flight",     "flight",   "— ms",  C_DIM),
+            ("⚠   Risk Level", "risk",     "LOW",   C_GREEN),
+        ]
+        for i,(label,key,default,color) in \
+                enumerate(params):
+            row = i//3; col = i%3
+            card = ctk.CTkFrame(cards_frame,
+                fg_color=C_CARD, corner_radius=10,
+                border_width=1, border_color=C_BORDER)
+            card.grid(row=row, column=col,
+                      padx=5, pady=5, sticky="nsew")
+            cards_frame.columnconfigure(col, weight=1)
+            ctk.CTkLabel(card, text=label,
+                font=("Syne",11), text_color=color
+            ).pack(anchor="w", padx=14, pady=(12,2))
+            lbl = ctk.CTkLabel(card, text=default,
+                font=("Syne",20,"bold"),
+                text_color="white")
+            lbl.pack(anchor="w", padx=14, pady=(0,12))
+            self.param_labels[key] = lbl
 
+        # ── Mouse dynamics header ──────────────────
+        ctk.CTkLabel(main,
+            text="Mouse Dynamics",
+            font=("Syne",14,"bold"),
+            text_color="white"
+        ).pack(anchor="w", pady=(12,4))
+        ctk.CTkLabel(main,
+            text="Live mouse behavioral metrics  ·  "
+                 "combined with keystroke scoring",
+            font=("JetBrains Mono",9),
+            text_color=C_DIM
+        ).pack(anchor="w", pady=(0,8))
+
+        # ── 5 Mouse parameter cards ────────────────
+        mouse_frame = ctk.CTkFrame(main,
+            fg_color="transparent")
+        mouse_frame.pack(fill="x", pady=(0,12))
+
+        self.mouse_labels = {}
+        mouse_params = [
+            ("🖱   Velocity",  "m_vel",     "— px/s", C_BLUE),
+            ("📐  Curvature",  "m_curve",   "—",      C_BLUE),
+            ("🖱   Clicks",    "m_clicks",  "0",      C_BRIGHT),
+            ("↕   Scrolls",   "m_scrolls", "0",      C_BRIGHT),
+            ("⏸   Idle Time", "m_idle",    "— ms",   C_DIM),
+        ]
+        for i,(label,key,default,color) in \
+                enumerate(mouse_params):
+            col = i % 5
+            card = ctk.CTkFrame(mouse_frame,
+                fg_color=C_CARD, corner_radius=10,
+                border_width=1, border_color=C_BORDER)
+            card.grid(row=0, column=col,
+                      padx=5, pady=5, sticky="nsew")
+            mouse_frame.columnconfigure(col, weight=1)
+            ctk.CTkLabel(card, text=label,
+                font=("Syne",11), text_color=color
+            ).pack(anchor="w", padx=14, pady=(12,2))
+            lbl = ctk.CTkLabel(card, text=default,
+                font=("Syne",18,"bold"),
+                text_color="white")
+            lbl.pack(anchor="w", padx=14, pady=(0,12))
+            self.mouse_labels[key] = lbl
+
+        # ── Mouse trust score bar ──────────────────
+        mt_card = ctk.CTkFrame(main,
+            fg_color=C_CARD, corner_radius=10,
+            border_width=1, border_color=C_BORDER)
+        mt_card.pack(fill="x", pady=(0,12))
+        mt_inner = ctk.CTkFrame(mt_card,
+            fg_color="transparent")
+        mt_inner.pack(fill="x", padx=16, pady=12)
+        ctk.CTkLabel(mt_inner,
+            text="🖱   Mouse Trust Score",
+            font=("Syne",11), text_color=C_BLUE
+        ).pack(side="left")
+        self.mouse_trust_lbl = ctk.CTkLabel(
+            mt_inner, text="— / 100",
+            font=("Syne",14,"bold"),
+            text_color="white")
+        self.mouse_trust_lbl.pack(side="right")
+        self.mouse_bar = ctk.CTkProgressBar(mt_card,
+            fg_color="#111120",
+            progress_color=C_BLUE,
+            height=4, corner_radius=3)
+        self.mouse_bar.pack(
+            fill="x", padx=16, pady=(0,12))
+        self.mouse_bar.set(0.85)
+
+       
         # Threat timeline
         tl_card = ctk.CTkFrame(main,
             fg_color=C_CARD, corner_radius=12,
@@ -758,7 +793,7 @@ class DashboardScreen(ctk.CTkFrame):
             target=self._score_tick,
             daemon=True
         ).start()
-        self.after(30000, self._update_loop)
+        self.after(10000, self._update_loop)
 
     def _score_tick(self):
         if not self.baseline:
@@ -886,9 +921,30 @@ class DashboardScreen(ctk.CTkFrame):
                 result['score'], risk)
         except Exception:
             pass
-
-            print(f"[LOCK CHECK] score={result['score']} "
-              f"should_lock={should_lock(result['score'])}")
+        
+        # ── Admin log ─────────────────────────────
+        try:
+            tx = ""
+            admin_log(
+                username   = self.state.get(
+                    'username', ''),
+                score      = result['score'],
+                risk       = risk,
+                dwell_ms   = self.last_dwell,
+                flight_ms  = self.last_flight,
+                mouse_vel  = float(
+                    getattr(self, '_mouse_display',
+                            {}).get(
+                        'velocity', '0'
+                    ).replace(' px/s', '') or 0),
+                locked     = should_lock(
+                    result['score']),
+                session_id = self.state.get(
+                    'session_id', ''),
+                tx_hash    = tx
+            )
+        except Exception:
+            pass
             
         # Lock trigger
         if should_lock(result['score']):

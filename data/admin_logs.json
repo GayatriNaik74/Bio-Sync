@@ -1,0 +1,64 @@
+{
+  "Gayatri": {
+    "events": [
+      {
+        "timestamp": "2026-05-27 01:07:16",
+        "score": 85.0,
+        "risk": "LOW",
+        "dwell_ms": 0.0,
+        "flight_ms": 0.0,
+        "mouse_vel": 2477.0,
+        "locked": false,
+        "session_id": "sess_Gayatri_202",
+        "tx_hash": ""
+      },
+      {
+        "timestamp": "2026-05-27 01:07:06",
+        "score": 85.0,
+        "risk": "LOW",
+        "dwell_ms": 0.0,
+        "flight_ms": 0.0,
+        "mouse_vel": 999.0,
+        "locked": false,
+        "session_id": "sess_Gayatri_202",
+        "tx_hash": ""
+      },
+      {
+        "timestamp": "2026-05-27 01:06:46",
+        "score": 85.0,
+        "risk": "LOW",
+        "dwell_ms": 0.0,
+        "flight_ms": 0.0,
+        "mouse_vel": 850.0,
+        "locked": false,
+        "session_id": "sess_Gayatri_202",
+        "tx_hash": ""
+      },
+      {
+        "timestamp": "2026-05-27 01:06:36",
+        "score": 85.0,
+        "risk": "LOW",
+        "dwell_ms": 0.0,
+        "flight_ms": 0.0,
+        "mouse_vel": 862.0,
+        "locked": false,
+        "session_id": "sess_Gayatri_202",
+        "tx_hash": ""
+      },
+      {
+        "timestamp": "2026-05-27 01:06:26",
+        "score": 85.0,
+        "risk": "LOW",
+        "dwell_ms": 0.0,
+        "flight_ms": 0.0,
+        "mouse_vel": 701.0,
+        "locked": false,
+        "session_id": "sess_Gayatri_202",
+        "tx_hash": ""
+      }
+    ],
+    "total_locks": 0,
+    "enrolled_on": "2026-05-27 01:06:05",
+    "last_seen": "2026-05-27 01:07:16"
+  }
+}
